@@ -6,7 +6,6 @@
   "author": "SpencerDevv",
   "license": "MIT",
   "scripts": {
-    "postinstall": "npm install --save-dev @types/express @types/node @types/mongodb",
     "build": "tsc --project ./",
     "start": "nodemon --loader ts-node/esm src/server.ts",
     "start:prod": "node dist/server.js"
@@ -23,7 +22,6 @@
   },
   "devDependencies": {
     "@types/express": "^4.17.17",
-    "@types/node": "^18.11.18",
-    "@types/mongodb": "^5.0.0"
+    "@types/node": "^18.11.18"
   }
 }
