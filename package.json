@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "build": "tsc --project ./",
-    "start": "nodemon --loader ts-node/esm src/server.ts",
+    "start": "node --loader ts-node/esm src/server.ts"
     "start:prod": "node dist/server.js"
   },
   "dependencies": {
