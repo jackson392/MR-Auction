@@ -79,7 +79,7 @@ interface RapCache {
 const server = Express();
 const routes = Router();
 const port = process.env.PORT || 3333;
-const uri = "mongodb+srv://spencer:spencerissexy@cluster0.hkjxzbm.mongodb.net/";
+const uri = "mongodb+srv://hilljackson820:<db_password>@cluster0.aps3dte.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
 const client = new MongoClient(uri);
 const serverCache: Map<string, string> = new Map();
 
