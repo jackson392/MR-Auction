@@ -1,37 +1,6 @@
 /* 
-                                                                        ....:::.          
-                                                    ....:::::-----==============:         
-                                 ....::::-----==================================:         
-            .....::::-----======================================================-         
-       .-=======================================================================-         
-       -=========================================================================         
-       -============================================================-:..    ..:==:        
-       :==================================--:::=====:.       .-====:    ...     --        
-       .=============---==:::.=====-    -=:    ===:    .::.    :==:    -====:::--=        
-        ==....          ==    -====-    :=-    -=:    -=====:--===.   :===========.       
-        -=         ..:::==.   :=====    .=-    :=.   .============.   .======-:::-.       
-        -======.   -======:    ..       .==    .=:    =======:-:-=:    -====-    =:       
-        :======:   .======-              ==    .=-    :=====.   :==:    .::.    :=:       
-        .======-    ======-    --====    ==:   .==-.    ...    :====-:.      .:-==-       
-         =======    -======    ======.   -==    ====-:.     .:===========--========       
-         -======.   :======.   -=====:...-==:::-===================================.      
-         :======: ..:======----====================================================:      
-         .========================================================================-       
-         .=======================================================-----:::::....           
-          ===================================----::::::.....       .    .::---:.          
-          -===============-----:::......           .:::.   --=======.  -==-:::-=.         
-           .::.....            .:::.     .====-    ====-   -==..      .===:..             
-                 :-====-:      =====.     =====:  -==-==   -==:::::.   :-=======:         
-               .==-:..:=-:    .==::==.    -=::==. ==::==.  :===-:::.        ..-==.        
-               -==.           :==. -=-    -=- :==.==..==.  .==-        :=-:..:-==         
-               -==.  :----:   -==::-==-   :==  -====  ==:  .===-----=: .--====-:.         
-               -==:  ..:==-  :==--:::==-  :==. .===-  -=:   --:::::...                    
-                -==-:::-===  ===.    :--:  ::.  ...                                       
-                 .:----. ::  ..                                                     
-                 
-                     
-    ! Written by Spencer - team@thicc.games
-    ? Developed with keyboards and pixie dust.
+  MR-Auction Server with CORS headers added
+  Written by Spencer - team@thicc.games
 */
 
 /* IMPORTS */
@@ -84,6 +53,17 @@ const client = new MongoClient(uri);
 const serverCache: Map<string, string> = new Map();
 
 let totalAuctionCount = 0;
+
+/* --- CORS Middleware (Add this BEFORE routes) --- */
+server.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*'); // Allow all origins
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, roblox-id, roblox-job, roblox-secret');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200); // Respond OK to OPTIONS/preflight
+  }
+  next();
+});
 
 /* FUNCTIONS */
 function generateUID(){
@@ -151,21 +131,24 @@ routes.post("/heartbeat", async (req, res) => {
     });
 
     // fetch all claimedAuctions at playerId key
-    playersIds.forEach((playerId) => {
-        client.db("MyRestaurant").collection("claimedAuctions").find({ sellerID: playerId }).forEach((auction) => {
+    for (const playerId of playersIds) {
+        await client.db("MyRestaurant").collection("claimedAuctions").find({ sellerID: playerId }).forEach((auction) => {
             playerAuctionsMap.push({
                 UID: auction.UID,
                 sellerID: auction.sellerID,
             });
         });
-    });
+    }
 
-    // fetch all claimedAuctions sorted by time and insert into purchaseHistory and limit it to the last 35 auctions
-    // calculate trend by averaging the last 5 auctions and comparing to current price (trend = 1 if it has increased, -1 if it has decreased, 0 if it has stayed the same)
-    // calculate RAP of item by averaging the last 5 auctions
+    // fetch last 35 claimed auctions, calculate trends and RAP
     await client.db("MyRestaurant").collection("claimedAuctions").find().sort({ time: -1 }).limit(35).forEach((auction) => {
-        // @ts-ignore
-        const trend = purchaseHistory.filter((auction) => auction.itemClass === auction.itemClass && auction.itemID === auction.itemID).length < 5 ? 0 : purchaseHistory.filter((auction) => auction.itemClass === auction.itemClass && auction.itemID === auction.itemID).slice(0, 5).reduce((a, b) => a.price + b.price) / 5 > auction.price ? -1 : purchaseHistory.filter((auction) => auction.itemClass === auction.itemClass && auction.itemID === auction.itemID).slice(0, 5).reduce((a, b) => a.price + b.price) / 5 < auction.price ? 1 : 0;
+        // Calculate trend (simplified)
+        const related = purchaseHistory.filter(ph => ph.itemClass === auction.itemClass && ph.itemID === auction.itemID);
+        let trend = 0;
+        if (related.length >= 5) {
+          const avg = related.slice(0,5).reduce((a,b) => a + b.price, 0)/5;
+          trend = avg > auction.price ? -1 : (avg < auction.price ? 1 : 0);
+        }
 
         purchaseHistory.push({
             UID: auction.UID,
@@ -177,24 +160,23 @@ routes.post("/heartbeat", async (req, res) => {
 
         if (!rapCache[auction.itemClass]) rapCache[auction.itemClass] = {};
         if (!rapCache[auction.itemClass][auction.itemID]) rapCache[auction.itemClass][auction.itemID] = 0;
-
         rapCache[auction.itemClass][auction.itemID] += auction.price;
     });
 
-    // calculate RAP of item by averaging the auctions with that class and itemID
-    Object.keys(rapCache).forEach((itemClass) => {
-        Object.keys(rapCache[itemClass]).forEach((itemID) => {
-            rapCache[itemClass][itemID] /= purchaseHistory.filter((auction) => auction.itemClass === itemClass && auction.itemID === itemID).length;
-        });
+    // average RAP per item
+    Object.keys(rapCache).forEach(itemClass => {
+      Object.keys(rapCache[itemClass]).forEach(itemID => {
+        const count = purchaseHistory.filter(ph => ph.itemClass === itemClass && ph.itemID === itemID).length;
+        if(count > 0) rapCache[itemClass][itemID] /= count;
+      });
     });
 
-    // convert dataCache to json
     return res.status(200).send({ 
-        totalAuctionCount: totalAuctionCount,
+        totalAuctionCount,
         claimedAuctions: playerAuctionsMap,
-        dataCache: dataCache,
-        purchaseHistory: purchaseHistory,
-        rapCache: rapCache,
+        dataCache,
+        purchaseHistory,
+        rapCache,
         success: true
     });
 });
@@ -214,12 +196,12 @@ routes.post("/createAuction", async (req, res) => {
 
     await client.db("MyRestaurant").collection("auctions").insertOne({
         UID: itemUID,
-        sellerID: sellerID,
-        price: price,
-        quantity: quantity,
-        length: length,
-        itemID: itemID,
-        itemClass: itemClass,
+        sellerID,
+        price,
+        quantity,
+        length,
+        itemID,
+        itemClass,
     });
 
     totalAuctionCount++;
@@ -227,7 +209,7 @@ routes.post("/createAuction", async (req, res) => {
     return res.status(200).send({ 
         success: true,
         UID: itemUID,
-        totalAuctionCount: totalAuctionCount
+        totalAuctionCount
     });
 });
 
@@ -244,23 +226,22 @@ routes.post("/purchaseAuction", async (req, res) => {
 
     if (!playerID || !itemUID || !playerCash) return res.status(400).send({ success: false, msg: "Missing playerID or itemUID or playerCash" });
 
-    // get auction data, if it exists and is not owned by the player, then delete it and insert it into claimedAuctions
+    // Get auction if exists & not owned by player
     const auction = await client.db("MyRestaurant").collection("auctions").findOneAndDelete({ UID: itemUID, sellerID: { $ne: playerID } });
     if (!auction) return res.status(200).send({ success: false, msg: "Unknown error" });
     if (!auction.value) return res.status(400).send({ success: false, msg: "Auction does not exist or is owned by the player" });
 
-    // check if player has enough cash
     if (playerCash < auction.value.price) return res.status(400).send({ success: false, msg: "Player does not have enough cash" });
 
     const { UID, sellerID, price, quantity, length, itemID, itemClass } = auction.value;
     await client.db("MyRestaurant").collection("claimedAuctions").insertOne({
-        UID: UID,
-        sellerID: sellerID,
-        price: price,
-        quantity: quantity,
-        length: length,
-        itemID: itemID,
-        itemClass: itemClass,
+        UID,
+        sellerID,
+        price,
+        quantity,
+        length,
+        itemID,
+        itemClass,
         time: new Date()
     });
 
@@ -268,12 +249,11 @@ routes.post("/purchaseAuction", async (req, res) => {
 
     return res.status(200).send({
         success: true,
-        totalAuctionCount: totalAuctionCount,
-
-        itemClass: itemClass,
-        itemID: itemID,
-        price: price,
-        quantity: quantity
+        totalAuctionCount,
+        itemClass,
+        itemID,
+        price,
+        quantity
     });
 });
 
@@ -288,8 +268,7 @@ routes.post("/cancelAuction", async (req, res) => {
     const itemUID = req.body.itemUID as string;
     if (!playerID || !itemUID) return res.status(400).send({ success: false, msg: "Missing playerID or itemUID" });
 
-    // check if the auction exists and is owned by the player, then delete it
-    const auction = await  client.db("MyRestaurant").collection("auctions").findOneAndDelete({ UID: itemUID, sellerID: playerID });
+    const auction = await client.db("MyRestaurant").collection("auctions").findOneAndDelete({ UID: itemUID, sellerID: playerID });
     if (!auction) return res.status(200).send({ success: false, msg: "Unknown error" });
     if (!auction.value) return res.status(400).send({ success: false, msg: "Auction does not exist or is not owned by the player" });
 
@@ -297,7 +276,7 @@ routes.post("/cancelAuction", async (req, res) => {
 
     return res.status(200).send({
         success: true,
-        totalAuctionCount: totalAuctionCount
+        totalAuctionCount
     });
 });
 
@@ -312,20 +291,20 @@ routes.post("/extendAuction", async (req, res) => {
     const itemUID = req.body.itemUID as string;
     if (!playerID || !itemUID) return res.status(400).send({ success: false, msg: "Missing playerID or itemUID" });
 
-    // check if the auction exists and is owned by the player, then extend it by 1 day (86400s)
-    const auction = await client.db("MyRestaurant").collection("auctions").updateOne({ itemUID: itemUID, sellerID: playerID }, { $inc: { length: 86400 } });
+    // Extend auction length by 86400 seconds (1 day)
+    const auction = await client.db("MyRestaurant").collection("auctions").updateOne({ UID: itemUID, sellerID: playerID }, { $inc: { length: 86400 } });
     if (!auction) return res.status(200).send({ success: false, msg: "Unknown error" });
-    if (auction.modifiedCount == 0) return res.status(400).send({ success: false, msg: "Auction does not exist or is not owned by the player" });
+    if (auction.modifiedCount === 0) return res.status(400).send({ success: false, msg: "Auction does not exist or is not owned by the player" });
 
     return res.status(200).send({
         success: true,
-        totalAuctionCount: totalAuctionCount
+        totalAuctionCount
     });
 });
 
 routes.get("/getAuctionCount", (req, res) => {
     return res.status(200).send({
-        totalAuctionCount: totalAuctionCount,
+        totalAuctionCount,
         success: true
     });
 });
@@ -334,19 +313,19 @@ routes.get("/", (req, res) => {
     return res.status(200).send("You are not allowed here!");
 });
 
-// create an async function to check for expired auctions
+/* --- Expired Auction Checker --- */
 async function checkForExpiredAuctions() {
     await client.db("MyRestaurant").collection("auctions").updateMany({}, { $inc: { length: -1 } });
     await client.db("MyRestaurant").collection("auctions").find({ length: { $lte: 0 } }).forEach((auction) => {
         const { UID, sellerID, price, quantity, length, itemID, itemClass } = auction;
         client.db("MyRestaurant").collection("claimedAuctions").insertOne({
-            UID: UID,
-            sellerID: sellerID,
-            price: price,
-            quantity: quantity,
-            length: length,
-            itemID: itemID,
-            itemClass: itemClass,
+            UID,
+            sellerID,
+            price,
+            quantity,
+            length,
+            itemID,
+            itemClass,
             time: new Date()
         });
     });
@@ -354,18 +333,18 @@ async function checkForExpiredAuctions() {
     await client.db("MyRestaurant").collection("auctions").deleteMany({ length: { $lte: 0 } });
 }
 
-/* CONCLUSION */
+/* MAIN */
 async function main() {
     await client.connect();
     server.use(json());
     server.use(routes);
     server.listen(port);
 
-    // fetch total auction count
+    // Initialize auction count
     totalAuctionCount = await client.db("MyRestaurant").collection("auctions").countDocuments();
     console.log("Total auction count: " + totalAuctionCount);
 
-    // run checkForExpiredAuctions every second
+    // Run expired auction checker every second
     setInterval(checkForExpiredAuctions, 1000);
 }
 
